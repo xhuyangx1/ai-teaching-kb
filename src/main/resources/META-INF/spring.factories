@@ -1,0 +1,5 @@
+# EnvironmentPostProcessor 注册（Spring Boot 3 仍从本文件加载该类）。
+# 作用：把对外开关 app.mq.enabled 归一化到内部选择器 kb.mq.mode，
+# 见 com.aiteaching.kb.mq.MqEnabledBridge。
+org.springframework.boot.env.EnvironmentPostProcessor=\
+com.aiteaching.kb.mq.MqEnabledBridge

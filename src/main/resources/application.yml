@@ -1,0 +1,107 @@
+server:
+  port: 8080
+  servlet:
+    encoding:
+      charset: UTF-8
+      force: true
+
+# ---------------------------------------------------------------------------
+# 对外业务开关（与"实现细节"分开摆放，便于运维一眼看到）
+#   app.mq.enabled=false → 内存队列（默认，离线可跑，语义与真 MQ 对齐）
+#   app.mq.enabled=true  → 真实 RocketMQ（namesrv 见 kb.mq.rocketmq.namesrv-addr）
+# 该开关由 com.aiteaching.kb.mq.MqEnabledBridge 在环境准备阶段归一化到 kb.mq.mode，
+# 只保留 kb.mq.mode 一个装配点，避免两个键同时控制 Bean 造成歧义。
+# ---------------------------------------------------------------------------
+app:
+  mq:
+    enabled: false
+
+spring:
+  application:
+    name: ai-teaching-kb
+  datasource:
+    url: "jdbc:h2:file:./data/kb;MODE=MySQL"
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema-h2.sql
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 25MB
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    banner: false
+    db-config:
+      id-type: auto
+
+kb:
+  llm:
+    # 对话模型 provider：mock（离线规则式）| openai（任何 OpenAI 兼容网关）
+    provider: mock
+    # 向量模型 provider：留空 = 跟随 provider；显式写 mock/openai 可混合。
+    # 用途：部分企业网关只代理 /chat/completions（/embeddings 返回 404），
+    # 此时配置 provider=openai + embedding-provider=mock，即可"真实模型回答 + 本地向量检索"。
+    embedding-provider: ""
+    openai:
+      # 任何 OpenAI 兼容网关都可以填这里（官方 / 硅基流动 / 自建代理）
+      base-url: "${OPENAI_BASE_URL:https://api.openai.com/v1}"
+      api-key: "${OPENAI_API_KEY:}"
+      chat-model: "${OPENAI_CHAT_MODEL:gpt-4o-mini}"
+      embedding-model: "${OPENAI_EMBEDDING_MODEL:text-embedding-3-small}"
+  mq:
+    mode: memory                         # memory | rocketmq（由 app.mq.enabled 归一化而来）
+    topic: KB_TASK
+    # 消费失败重试策略（内存队列与真实 MQ 共用同一组语义参数）
+    retry:
+      max-attempts: 3                    # 含首次；3 = 首次 + 2 次重投，之后进死信
+      backoff-ms: 200                    # 指数退避基数：200 / 400 / 800
+      max-backoff-ms: 5000
+    memory:
+      queue-capacity: 10000              # 有界队列，满则拒绝入队并标记任务失败（不静默丢消息）
+      workers: 4
+      dead-letter-retained: 100
+    rocketmq:
+      namesrv-addr: "127.0.0.1:9876"
+      topic: KB_TASK
+      consumer-group: kb_consumer
+  rag:
+    chunk-size: 500
+    chunk-overlap: 50
+    top-k: 5
+    score-threshold: 0.15
+  redis:
+    host: 127.0.0.1
+    port: 6379
+    timeout-ms: 2000
+  # 限流：用户维度 + IP 维度，任一超限即 429。
+  # 只按用户限流会被"换 userId"绕过；只按 IP 限流会让同一出口 IP 的正常用户互相挤占配额。
+  rate-limit:
+    user-enabled: true
+    qps: 5                               # 用户维度：每秒补充令牌数
+    capacity: 10                         # 用户维度：桶容量（突发上限）
+    ip-enabled: true
+    ip-qps: 50                           # IP 维度通常更宽松：同一出口 IP 后面可能很多人
+    ip-capacity: 100
+    trust-forwarded-for: false           # 安全默认：只认 remoteAddr。仅当部署在可信反向代理（会重写该头）之后才置 true
+  # 分片上传（断点续传）：大文件/弱网场景，客户端可中断后只补缺失分片
+  upload:
+    chunk-size: 5242880            # 默认 5MB（客户端可在 init 时覆盖）
+    max-chunk-size: 33554432       # 单分片上限 32MB
+    max-file-size: 2147483648      # 单文件上限 2GB
+    ttl-hours: 24                  # 未完成会话存活时长，超时由定时任务回收分片
+    reap-interval-ms: 3600000      # 回收任务间隔（1 小时）
+
+  chat:
+    history-turns: 5
+
+logging:
+  level:
+    root: INFO
+    com.aiteaching.kb: INFO
